@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ledger — Personal Finance</title>
+<meta name="theme-color" content="#0F1516">
+<meta name="description" content="Your personal money tracker — expenses, budget, debts and bills.">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<div class="app-shell">
+
+  <!-- Desktop sidebar -->
+  <nav class="sidenav" aria-label="Main navigation">
+    <div class="brand">
+      <span class="brand-mark">₹</span>
+      <span class="brand-name">Ledger</span>
+    </div>
+    <button class="navlink" data-route="dashboard"><span class="ni">◆</span>Dashboard</button>
+    <button class="navlink" data-route="add"><span class="ni">+</span>Add entry</button>
+    <button class="navlink" data-route="transactions"><span class="ni">≡</span>Transactions</button>
+    <button class="navlink" data-route="budget"><span class="ni">▤</span>Budget</button>
+    <button class="navlink" data-route="debts"><span class="ni">✦</span>Debts &amp; Lending</button>
+    <button class="navlink" data-route="recurring"><span class="ni">◷</span>Bills &amp; Calendar</button>
+    <button class="navlink" data-route="investments"><span class="ni">↗</span>Investments</button>
+    <button class="navlink" data-route="more"><span class="ni">⋯</span>More</button>
+  </nav>
+
+  <!-- Top bar (mobile) -->
+  <header class="topbar">
+    <span class="brand-mark">₹</span>
+    <span id="topbarTitle">Dashboard</span>
+  </header>
+
+  <main id="content" class="content" tabindex="-1"></main>
+
+  <!-- Mobile bottom nav -->
+  <nav class="bottomnav" aria-label="Main navigation">
+    <button class="navlink" data-route="dashboard"><span class="ni">◆</span><small>Home</small></button>
+    <button class="navlink" data-route="transactions"><span class="ni">≡</span><small>Ledger</small></button>
+    <button class="navlink navlink-add" data-route="add"><span class="ni">+</span></button>
+    <button class="navlink" data-route="debts"><span class="ni">✦</span><small>Debts</small></button>
+    <button class="navlink" data-route="more"><span class="ni">⋯</span><small>More</small></button>
+  </nav>
+
+</div>
+
+<script src="seed-data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
