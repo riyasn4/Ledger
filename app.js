@@ -387,35 +387,54 @@ function filteredTransactions(){
   }).sort((a,b)=> b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
 }
 
+function signedAmount(t){
+  if(t.type==='Transfer') return 0;
+  if(t.type==='Adjustment') return t.amount;
+  const dir = TYPE_DIRECTION[t.type] || 'out';
+  return dir==='in' ? t.amount : -t.amount;
+}
+
+function groupByCategory(list){
+  const groups = {};
+  list.forEach(t=>{
+    const key = t.category || 'No category';
+    (groups[key] = groups[key] || []).push(t);
+  });
+  return Object.keys(groups).sort((a,b)=>a.localeCompare(b)).map(cat=>({
+    cat,
+    items: groups[cat].slice().sort((a,b)=> b.date.localeCompare(a.date) || b.id.localeCompare(a.id)),
+    total: groups[cat].reduce((s,t)=>s+signedAmount(t),0)
+  }));
+}
+
 function renderTransactions(){
   const all = filteredTransactions();
+  const sortMode = uiState.txnSort || 'date';
   const pageSize = 25;
-  const shown = all.slice(0, pageSize * uiState.txnPage);
   const months = uniq(Store.data.transactions.map(t=>monthKeyOf(t.date))).sort().reverse();
   const accounts = Store.data.accounts.map(a=>a.name);
 
-  let lastDay = null;
   let rows = '';
-  if(shown.length===0){
+  if(all.length===0){
     rows = `<div class="empty-state"><span class="ni">≡</span>No transactions match. Try clearing filters.</div>`;
+  } else if(sortMode === 'category'){
+    const groups = groupByCategory(all);
+    groups.forEach(g=>{
+      rows += `<div class="day-divider"><span>${escapeHtml(g.cat)} · ${g.items.length}</span><span class="mono ${g.total>=0?'amount pos':'amount neg'}">${g.total>=0?'+':''}${fmtMoney(g.total)}</span></div>`;
+      g.items.forEach(t=>{ rows += txnItemHtml(t); });
+    });
   } else {
+    const shown = all.slice(0, pageSize * uiState.txnPage);
+    let lastDay = null;
     shown.forEach(t=>{
       if(t.date !== lastDay){
         lastDay = t.date;
-        const dayTotal = all.filter(x=>x.date===t.date).reduce((s,x)=> s + (TYPE_DIRECTION[x.type]==='in'||x.type==='Transfer'?0:0),0);
         rows += `<div class="day-divider"><span>${dayLabel(t.date)}</span></div>`;
       }
-      const c = typeColor(t.type);
-      rows += `<div class="txn-item" data-id="${t.id}">
-        <div class="txn-icon" style="background:${c.bg};color:${c.fg}">${(t.category||t.type||'?').slice(0,1)}</div>
-        <div class="txn-mid">
-          <div class="txn-desc">${escapeHtml(t.description || t.type)}</div>
-          <div class="txn-meta">${escapeHtml(t.type)}${t.category?' · '+escapeHtml(t.category):''}${t.source?' · '+escapeHtml(t.source):''}</div>
-        </div>
-        <div class="txn-amount" style="color:${c.fg}">${c.sign}${fmtMoney(Math.abs(t.amount))}</div>
-      </div>`;
+      rows += txnItemHtml(t);
     });
   }
+  const shownCount = sortMode==='category' ? all.length : Math.min(all.length, pageSize*uiState.txnPage);
 
   return `
     <h1 class="page-title">Transactions</h1>
@@ -426,6 +445,10 @@ function renderTransactions(){
       <input type="text" id="txnSearch" placeholder="Search description, notes, person…" value="${escapeHtml(uiState.txnFilters.q)}">
     </div>
     <div class="filter-chips">
+      <select class="chip-select" id="sortMode">
+        <option value="date" ${sortMode==='date'?'selected':''}>Sort: Newest first</option>
+        <option value="category" ${sortMode==='category'?'selected':''}>Sort: By category</option>
+      </select>
       <select class="chip-select" id="filterMonth">
         <option value="">All months</option>
         ${months.map(m=>`<option value="${m}" ${m===uiState.txnFilters.month?'selected':''}>${monthLabel(m)}</option>`).join('')}
@@ -441,8 +464,20 @@ function renderTransactions(){
     </div>
 
     <div class="card" style="padding:6px 12px;">${rows}</div>
-    ${all.length > shown.length ? `<button class="btn btn-secondary" id="loadMoreBtn" style="margin-top:12px;">Load more (${all.length - shown.length} left)</button>` : ''}
+    ${sortMode==='date' && all.length > shownCount ? `<button class="btn btn-secondary" id="loadMoreBtn" style="margin-top:12px;">Load more (${all.length - shownCount} left)</button>` : ''}
   `;
+}
+
+function txnItemHtml(t){
+  const c = typeColor(t.type);
+  return `<div class="txn-item" data-id="${t.id}">
+    <div class="txn-icon" style="background:${c.bg};color:${c.fg}">${(t.category||t.type||'?').slice(0,1)}</div>
+    <div class="txn-mid">
+      <div class="txn-desc">${escapeHtml(t.description || t.type)}</div>
+      <div class="txn-meta">${dayLabel(t.date)} · ${escapeHtml(t.type)}${t.source?' · '+escapeHtml(t.source):''}</div>
+    </div>
+    <div class="txn-amount" style="color:${c.fg}">${c.sign}${fmtMoney(Math.abs(t.amount))}</div>
+  </div>`;
 }
 
 /* ===================== Budget ===================== */
@@ -647,6 +682,21 @@ function renderMore(){
       <button class="btn-ghost" id="addAccountBtn" style="margin-top:10px;">+ Add account</button>
     </div>
 
+    <div class="section-label">Categories</div>
+    <div class="card">
+      <p class="page-sub mt-0">Edit which subcategories show up when you add an entry.</p>
+      <div class="field"><label>Category</label>
+        <select id="catEditorSelect">
+          ${Object.keys(Store.data.settings.categorySubcategoryMap).map(c=>`<option value="${escapeHtml(c)}" ${c===(uiState.catEditorCat||Object.keys(Store.data.settings.categorySubcategoryMap)[0])?'selected':''}>${escapeHtml(c)}</option>`).join('')}
+        </select>
+      </div>
+      <div id="subcatList"></div>
+      <div class="row-2" style="margin-top:10px;">
+        <input type="text" id="newSubcatInput" placeholder="New subcategory name" style="grid-column:span 1;background:var(--surface-2);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-s);padding:11px 12px;">
+        <button class="btn-secondary" id="addSubcatBtn">Add</button>
+      </div>
+    </div>
+
     <div class="section-label">Your data</div>
     <div class="card">
       <p class="page-sub mt-0">Everything is stored only on this device's browser storage. Back up regularly, especially before switching phones.</p>
@@ -745,6 +795,9 @@ function renderAddWithDraft(draft){
 }
 
 function wireTransactionsPage(){
+  document.getElementById('sortMode').addEventListener('change', e=>{
+    uiState.txnSort = e.target.value; uiState.txnPage=1; render();
+  });
   document.getElementById('txnSearch').addEventListener('input', e=>{
     uiState.txnFilters.q = e.target.value; uiState.txnPage=1; render();
   });
@@ -936,7 +989,43 @@ function wireInvestmentsPage(){
   });
 }
 
+function renderSubcatList(){
+  const cat = uiState.catEditorCat || Object.keys(Store.data.settings.categorySubcategoryMap)[0];
+  const subs = Store.data.settings.categorySubcategoryMap[cat] || [];
+  const el = document.getElementById('subcatList');
+  if(!el) return;
+  el.innerHTML = subs.length ? subs.map(s=>`
+    <div class="ledger-row">
+      <span class="label">${escapeHtml(s)}</span><span class="fill"></span>
+      <button class="icon-btn removeSubcatBtn" data-name="${escapeHtml(s)}" title="Remove" style="width:26px;height:26px;font-size:0.8rem;">×</button>
+    </div>`).join('') : `<p class="page-sub mt-0">No subcategories yet.</p>`;
+  el.querySelectorAll('.removeSubcatBtn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const list = Store.data.settings.categorySubcategoryMap[cat];
+      Store.data.settings.categorySubcategoryMap[cat] = list.filter(x=>x!==btn.dataset.name);
+      Store.save(); toast('Removed'); renderSubcatList();
+    });
+  });
+}
+
 function wireMorePage(){
+  uiState.catEditorCat = uiState.catEditorCat || Object.keys(Store.data.settings.categorySubcategoryMap)[0];
+  renderSubcatList();
+  document.getElementById('catEditorSelect').addEventListener('change', e=>{
+    uiState.catEditorCat = e.target.value; renderSubcatList();
+  });
+  document.getElementById('addSubcatBtn').addEventListener('click', ()=>{
+    const input = document.getElementById('newSubcatInput');
+    const name = input.value.trim();
+    if(!name){ toast('Type a name first'); return; }
+    const cat = uiState.catEditorCat;
+    if(!Store.data.settings.categorySubcategoryMap[cat].includes(name)){
+      Store.data.settings.categorySubcategoryMap[cat].push(name);
+      Store.save(); toast('Added');
+    }
+    input.value='';
+    renderSubcatList();
+  });
   document.getElementById('addAccountBtn').addEventListener('click', ()=>{
     const name = prompt('Account name:'); if(!name) return;
     const opening = parseFloat(prompt('Opening balance (₹):','0')||'0');
