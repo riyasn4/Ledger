@@ -463,7 +463,7 @@ function renderTransactions(){
     </div>
 
     <div class="card" style="padding:6px 12px;">${rows}</div>
-    ${sortMode==='date' && all.length > shownCount ? `<button class="btn btn-secondary" id="loadMoreBtn" style="margin-top:12px;">Load more (${all.length - shownCount} left)</button>` : ''}
+    ${all.length > shown.length ? `<button class="btn btn-secondary" id="loadMoreBtn" style="margin-top:12px;">Load more (${all.length - shown.length} left)</button>` : ''}
   `;
 }
 

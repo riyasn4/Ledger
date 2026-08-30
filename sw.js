@@ -1,10 +1,12 @@
-const CACHE = 'ledger-cache-v1';
+const CACHE = 'ledger-cache-v2';
 const ASSETS = [
   './',
   './index.html',
   './style.css',
   './app.js',
   './seed-data.js',
+  './drive-config.js',
+  './drive-sync.js',
   './manifest.json',
   './icons/icon.svg',
   './icons/icon-192.png',
