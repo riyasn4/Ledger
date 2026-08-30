@@ -39,12 +39,17 @@ const Store = {
   load(){
     const raw = localStorage.getItem(STORAGE_KEY);
     if(raw){
-      try{ this.data = JSON.parse(raw); return; }catch(e){ console.warn('Corrupt data, reseeding', e); }
+      try{
+        this.data = JSON.parse(raw);
+        if(!this.data.meta) this.data.meta = { nextId: this._computeNextId(this.data) };
+        if(!this.data.meta.updatedAt) this.data.meta.updatedAt = Date.now();
+        return;
+      }catch(e){ console.warn('Corrupt data, reseeding', e); }
     }
     this.data = structuredClone(SEED_DATA);
     this.data.recurringInstances = this.data.recurringInstances || [];
-    this.data.meta = { nextId: this._computeNextId(this.data) };
-    this.save();
+    this.data.meta = { nextId: this._computeNextId(this.data), updatedAt: Date.now() };
+    this.save({ skipSync:true });
   },
 
   _computeNextId(d){
@@ -58,8 +63,12 @@ const Store = {
     return max+1;
   },
 
-  save(){
+  save(opts){
+    opts = opts || {};
+    if(!this.data.meta) this.data.meta = {};
+    if(!opts.skipTimestamp) this.data.meta.updatedAt = Date.now();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+    if(!opts.skipSync && typeof DriveSync !== 'undefined') DriveSync.scheduleSync();
   },
 
   newId(prefix){
@@ -174,7 +183,7 @@ function totalOutstandingLending(){
 /* ===================== Router ===================== */
 const ROUTES = ['dashboard','add','transactions','budget','debts','recurring','investments','more'];
 let currentRoute = 'dashboard';
-let uiState = { txnPage:1, txnFilters:{ q:'', month:'', account:'', type:'' }, budgetMonth:'', recurringMonth:'', editingTxnId:null };
+let uiState = { txnPage:1, txnFilters:{ q:'', month:'', account:'', type:'', category:'' }, budgetMonth:'', recurringMonth:'', editingTxnId:null };
 
 function navigate(route){
   if(!ROUTES.includes(route)) route='dashboard';
@@ -379,6 +388,7 @@ function filteredTransactions(){
     if(f.month && monthKeyOf(t.date)!==f.month) return false;
     if(f.account && t.source!==f.account && t.dest!==f.account) return false;
     if(f.type && t.type!==f.type) return false;
+    if(f.category && (t.category||'No category')!==f.category) return false;
     if(f.q){
       const hay = `${t.description} ${t.notes} ${t.category} ${t.subcategory} ${t.person}`.toLowerCase();
       if(!hay.includes(f.q.toLowerCase())) return false;
@@ -394,37 +404,18 @@ function signedAmount(t){
   return dir==='in' ? t.amount : -t.amount;
 }
 
-function groupByCategory(list){
-  const groups = {};
-  list.forEach(t=>{
-    const key = t.category || 'No category';
-    (groups[key] = groups[key] || []).push(t);
-  });
-  return Object.keys(groups).sort((a,b)=>a.localeCompare(b)).map(cat=>({
-    cat,
-    items: groups[cat].slice().sort((a,b)=> b.date.localeCompare(a.date) || b.id.localeCompare(a.id)),
-    total: groups[cat].reduce((s,t)=>s+signedAmount(t),0)
-  }));
-}
-
 function renderTransactions(){
   const all = filteredTransactions();
-  const sortMode = uiState.txnSort || 'date';
   const pageSize = 25;
+  const shown = all.slice(0, pageSize * uiState.txnPage);
   const months = uniq(Store.data.transactions.map(t=>monthKeyOf(t.date))).sort().reverse();
   const accounts = Store.data.accounts.map(a=>a.name);
+  const categories = uniq(Store.data.transactions.map(t=>t.category||'No category')).sort((a,b)=>a.localeCompare(b));
 
   let rows = '';
-  if(all.length===0){
+  if(shown.length===0){
     rows = `<div class="empty-state"><span class="ni">≡</span>No transactions match. Try clearing filters.</div>`;
-  } else if(sortMode === 'category'){
-    const groups = groupByCategory(all);
-    groups.forEach(g=>{
-      rows += `<div class="day-divider"><span>${escapeHtml(g.cat)} · ${g.items.length}</span><span class="mono ${g.total>=0?'amount pos':'amount neg'}">${g.total>=0?'+':''}${fmtMoney(g.total)}</span></div>`;
-      g.items.forEach(t=>{ rows += txnItemHtml(t); });
-    });
   } else {
-    const shown = all.slice(0, pageSize * uiState.txnPage);
     let lastDay = null;
     shown.forEach(t=>{
       if(t.date !== lastDay){
@@ -434,21 +425,25 @@ function renderTransactions(){
       rows += txnItemHtml(t);
     });
   }
-  const shownCount = sortMode==='category' ? all.length : Math.min(all.length, pageSize*uiState.txnPage);
+
+  // Spend total for whatever is currently filtered (this is what answers "how much did I spend on X")
+  const filteredTotal = all.reduce((s,t)=>s+signedAmount(t),0);
+  const hasFilter = uiState.txnFilters.month || uiState.txnFilters.account || uiState.txnFilters.type || uiState.txnFilters.category || uiState.txnFilters.q;
 
   return `
     <h1 class="page-title">Transactions</h1>
     <p class="page-sub">${all.length} entr${all.length===1?'y':'ies'}${uiState.txnFilters.month ? ' in '+monthLabel(uiState.txnFilters.month) : ''}</p>
+
+    ${hasFilter ? `<div class="stat-tile" style="margin-bottom:12px;">
+        <div class="stat-label">Net for this filter</div>
+        <div class="stat-value ${filteredTotal>=0?'':''}" style="color:${filteredTotal>=0?'var(--income)':'var(--expense)'}">${filteredTotal>=0?'+':''}${fmtMoney(filteredTotal)}</div>
+      </div>` : ''}
 
     <div class="search-bar">
       <span>🔍</span>
       <input type="text" id="txnSearch" placeholder="Search description, notes, person…" value="${escapeHtml(uiState.txnFilters.q)}">
     </div>
     <div class="filter-chips">
-      <select class="chip-select" id="sortMode">
-        <option value="date" ${sortMode==='date'?'selected':''}>Sort: Newest first</option>
-        <option value="category" ${sortMode==='category'?'selected':''}>Sort: By category</option>
-      </select>
       <select class="chip-select" id="filterMonth">
         <option value="">All months</option>
         ${months.map(m=>`<option value="${m}" ${m===uiState.txnFilters.month?'selected':''}>${monthLabel(m)}</option>`).join('')}
@@ -460,6 +455,10 @@ function renderTransactions(){
       <select class="chip-select" id="filterType">
         <option value="">All types</option>
         ${ALL_TXN_TYPES.map(tt=>`<option value="${tt}" ${tt===uiState.txnFilters.type?'selected':''}>${tt}</option>`).join('')}
+      </select>
+      <select class="chip-select" id="filterCategory">
+        <option value="">All categories</option>
+        ${categories.map(c=>`<option value="${escapeHtml(c)}" ${c===uiState.txnFilters.category?'selected':''}>${escapeHtml(c)}</option>`).join('')}
       </select>
     </div>
 
@@ -675,8 +674,32 @@ function renderMore(){
       <span class="amount neutral">${fmtMoney(accountBalance(a.id))}</span>
     </div>`).join('');
 
+  const ds = DriveSync.getStatus();
+  const signedIn = DriveSync.isSignedIn();
+  const configured = DriveSync.isConfigured();
+  const dotColor = ds.state==='idle' ? 'var(--income)' : ds.state==='error' ? 'var(--expense)' : ds.state==='syncing'||ds.state==='pending' ? 'var(--debt)' : 'var(--text-faint)';
+  const lastSyncText = ds.lastSync ? new Date(ds.lastSync).toLocaleString('en-IN', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' }) : 'never';
+
   return `
     <h1 class="page-title">More</h1>
+
+    <div class="section-label">Sync across devices</div>
+    <div class="card">
+      ${!configured ? `
+        <p class="page-sub mt-0">Not set up yet. Follow "Setting up Google Drive sync" in the README to connect this app to your Google Drive, then your phone and laptop will stay in sync automatically.</p>
+      ` : `
+        <div class="flex-between">
+          <div><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${dotColor};margin-right:8px;"></span>${escapeHtml(ds.message)}</div>
+        </div>
+        <div class="txn-meta" style="margin-top:6px;">Last synced: ${lastSyncText}</div>
+        <div class="btn-row" style="margin-top:12px;">
+          ${signedIn
+            ? `<button class="btn-secondary" id="syncNowBtn" style="flex:1;">Sync now</button><button class="btn-ghost" id="signOutBtn">Sign out</button>`
+            : `<button class="btn" id="signInBtn">Sign in with Google</button>`}
+        </div>
+      `}
+    </div>
+
     <div class="section-label">Accounts</div>
     <div class="card">${accRows}
       <button class="btn-ghost" id="addAccountBtn" style="margin-top:10px;">+ Add account</button>
@@ -795,15 +818,13 @@ function renderAddWithDraft(draft){
 }
 
 function wireTransactionsPage(){
-  document.getElementById('sortMode').addEventListener('change', e=>{
-    uiState.txnSort = e.target.value; uiState.txnPage=1; render();
-  });
   document.getElementById('txnSearch').addEventListener('input', e=>{
     uiState.txnFilters.q = e.target.value; uiState.txnPage=1; render();
   });
   document.getElementById('filterMonth').addEventListener('change', e=>{ uiState.txnFilters.month=e.target.value; uiState.txnPage=1; render(); });
   document.getElementById('filterAccount').addEventListener('change', e=>{ uiState.txnFilters.account=e.target.value; uiState.txnPage=1; render(); });
   document.getElementById('filterType').addEventListener('change', e=>{ uiState.txnFilters.type=e.target.value; uiState.txnPage=1; render(); });
+  document.getElementById('filterCategory').addEventListener('change', e=>{ uiState.txnFilters.category=e.target.value; uiState.txnPage=1; render(); });
   const loadMore = document.getElementById('loadMoreBtn');
   if(loadMore) loadMore.addEventListener('click', ()=>{ uiState.txnPage++; render(); });
   document.querySelectorAll('.txn-item').forEach(item=>{
@@ -1009,6 +1030,17 @@ function renderSubcatList(){
 }
 
 function wireMorePage(){
+  const signInBtn = document.getElementById('signInBtn');
+  if(signInBtn) signInBtn.addEventListener('click', ()=> DriveSync.signIn());
+  const signOutBtn = document.getElementById('signOutBtn');
+  if(signOutBtn) signOutBtn.addEventListener('click', ()=>{ DriveSync.signOut(); render(); });
+  const syncNowBtn = document.getElementById('syncNowBtn');
+  if(syncNowBtn) syncNowBtn.addEventListener('click', ()=> DriveSync.syncNow());
+  if(!wireMorePage._subscribed){
+    wireMorePage._subscribed = true;
+    DriveSync.onStatusChange(()=>{ if(currentRoute==='more') render(); });
+  }
+
   uiState.catEditorCat = uiState.catEditorCat || Object.keys(Store.data.settings.categorySubcategoryMap)[0];
   renderSubcatList();
   document.getElementById('catEditorSelect').addEventListener('change', e=>{
