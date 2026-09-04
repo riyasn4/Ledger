@@ -115,6 +115,46 @@ function toast(msg){
   clearTimeout(toast._t);
   toast._t = setTimeout(()=> el.classList.remove('show'), 2200);
 }
+
+/* ---- Small bottom-sheet helper (replaces browser prompt()/confirm() for real forms) ---- */
+function openSheet(title, bodyHtml, mountFn){
+  closeSheet();
+  const wrap = document.createElement('div');
+  wrap.className = 'sheet-backdrop';
+  wrap.id = 'activeSheet';
+  wrap.innerHTML = `<div class="sheet"><div class="sheet-handle"></div>
+    <div class="flex-between"><div class="sheet-title mb-0">${escapeHtml(title)}</div>
+    <button class="icon-btn" id="sheetCloseBtn" type="button">×</button></div>
+    <div id="sheetBody">${bodyHtml}</div></div>`;
+  wrap.addEventListener('click', e=>{ if(e.target===wrap) closeSheet(); });
+  document.body.appendChild(wrap);
+  document.getElementById('sheetCloseBtn').addEventListener('click', closeSheet);
+  if(mountFn) mountFn(wrap);
+}
+function closeSheet(){
+  const el = document.getElementById('activeSheet');
+  if(el) el.remove();
+}
+
+// Shows an account dropdown in a sheet; calls back with the chosen account name, or null if cancelled.
+function pickAccountAsync(label, callback){
+  const names = Store.data.accounts.map(a=>a.name);
+  if(names.length===0){ toast('Add an account first (More → Accounts)'); callback(null); return; }
+  const body = `
+    <p class="page-sub mt-0">${escapeHtml(label)}</p>
+    <div class="field"><select id="sheetAccountSelect">
+      ${names.map(n=>`<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('')}
+    </select></div>
+    <button class="btn" id="sheetAccountConfirm" type="button">Continue</button>
+  `;
+  openSheet('Choose an account', body, ()=>{
+    document.getElementById('sheetAccountConfirm').addEventListener('click', ()=>{
+      const val = document.getElementById('sheetAccountSelect').value;
+      closeSheet();
+      callback(val);
+    });
+  });
+}
 function uniq(arr){ return [...new Set(arr)]; }
 
 /* ===================== Derived data / computations ===================== */
@@ -535,6 +575,7 @@ function renderDebts(){
       <div class="btn-row" style="margin-top:12px;">
         <button class="btn-secondary logPaymentBtn" style="flex:1;padding:9px;border-radius:8px;" data-id="${d.id}">Log payment</button>
         <button class="btn-ghost editDebtBtn" data-id="${d.id}">Edit</button>
+        <button class="btn-ghost deleteDebtBtn" data-id="${d.id}">Delete</button>
       </div>
     </div>`).join('') + `<button class="btn btn-secondary" id="addDebtBtn" style="margin-top:6px;">+ Add a debt / EMI</button>`;
 
@@ -549,7 +590,11 @@ function renderDebts(){
       </div>
       <div class="ledger-row"><span class="label">${escapeHtml(f.reason||'—')} · ${f.date}</span><span class="fill"></span><span class="amount neutral">${fmtMoney(f.amount)}</span></div>
       <div class="txn-meta">Outstanding: ${fmtMoney(outstanding)} ${outstanding<=0?'· Settled':''}</div>
-      ${outstanding>0 ? `<button class="btn-secondary settleBtn" style="margin-top:10px;width:100%;padding:9px;border-radius:8px;" data-id="${f.id}">Settle / record payment</button>` : ''}
+      <div class="btn-row" style="margin-top:10px;">
+        ${outstanding>0 ? `<button class="btn-secondary settleBtn" style="flex:1;padding:9px;border-radius:8px;" data-id="${f.id}">Settle</button>` : ''}
+        <button class="btn-ghost editLendBtn" data-id="${f.id}">Edit</button>
+        <button class="btn-ghost deleteLendBtn" data-id="${f.id}">Delete</button>
+      </div>
     </div>`;
   }).join('') + `<button class="btn btn-secondary" id="addLendBtn" style="margin-top:6px;">+ Add lending / borrowing</button>`;
 
@@ -865,13 +910,14 @@ function wireDebtsPage(){
       if(val===null) return;
       const amt = parseFloat(val);
       if(isNaN(amt) || amt<=0){ toast('Enter a valid amount'); return; }
-      const accName = pickAccount(`Pay from which account?`);
-      if(!accName) return;
-      Store.data.transactions.push({ id: Store.newId('t'), date: todayStr(), amount: amt, type:'Debt repayment',
-        source: accName, dest:'', category:'Debt & Loans', subcategory: d.name, description:`${d.name} payment`,
-        paymentMethod:'', person:'', notes:'' });
-      if(typeof d.balance === 'number') d.balance = Math.max(0, d.balance - amt);
-      Store.save(); toast('Payment logged'); render();
+      pickAccountAsync('Pay from which account?', accName=>{
+        if(!accName) return;
+        Store.data.transactions.push({ id: Store.newId('t'), date: todayStr(), amount: amt, type:'Debt repayment',
+          source: accName, dest:'', category:'Debt & Loans', subcategory: d.name, description:`${d.name} payment`,
+          paymentMethod:'', person:'', notes:'' });
+        if(typeof d.balance === 'number') d.balance = Math.max(0, d.balance - amt);
+        Store.save(); toast('Payment logged'); render();
+      });
     });
   });
   document.querySelectorAll('.editDebtBtn').forEach(btn=>{
@@ -882,6 +928,15 @@ function wireDebtsPage(){
       const due = prompt(`Due day of month (1-31, blank if unknown):`, d.dueDay ?? '');
       if(due!==null){ const n=parseInt(due,10); d.dueDay = isNaN(n)?null:n; }
       Store.save(); render();
+    });
+  });
+  document.querySelectorAll('.deleteDebtBtn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const d = Store.data.debts.find(x=>x.id===btn.dataset.id);
+      if(confirm(`Delete "${d.name}" from your debts list? Past transactions won't be deleted.`)){
+        Store.data.debts = Store.data.debts.filter(x=>x.id!==d.id);
+        Store.save(); toast('Deleted'); render();
+      }
     });
   });
   const addDebtBtn = document.getElementById('addDebtBtn');
@@ -901,46 +956,110 @@ function wireDebtsPage(){
       if(val===null) return;
       const amt = parseFloat(val);
       if(isNaN(amt) || amt<=0){ toast('Enter a valid amount'); return; }
-      const accName = pickAccount(f.direction==='I Lent' ? 'Receiving into which account?' : 'Paying from which account?');
-      if(!accName) return;
-      f.amountSettled = (f.amountSettled||0) + amt;
-      f.settlementDate = todayStr();
-      if(f.amount - f.amountSettled <= 0) f.status = 'Settled';
-      Store.data.transactions.push({ id: Store.newId('t'), date: todayStr(), amount: amt,
-        type: f.direction==='I Lent' ? 'Money Received - Lent' : 'Debt repayment',
-        source: accName, dest:'', category:'', subcategory:'', description:`${f.person} settlement`,
-        paymentMethod:'', person: f.person, notes:'' });
-      Store.save(); toast('Recorded'); render();
+      pickAccountAsync(f.direction==='I Lent' ? 'Receiving into which account?' : 'Paying from which account?', accName=>{
+        if(!accName) return;
+        f.amountSettled = (f.amountSettled||0) + amt;
+        f.settlementDate = todayStr();
+        if(f.amount - f.amountSettled <= 0) f.status = 'Settled';
+        Store.data.transactions.push({ id: Store.newId('t'), date: todayStr(), amount: amt,
+          type: f.direction==='I Lent' ? 'Money Received - Lent' : 'Debt repayment',
+          source: accName, dest:'', category:'', subcategory:'', description:`${f.person} settlement`,
+          paymentMethod:'', person: f.person, notes:'' });
+        Store.save(); toast('Recorded'); render();
+      });
+    });
+  });
+  document.querySelectorAll('.editLendBtn').forEach(btn=>{
+    btn.addEventListener('click', ()=> openLendEditSheet(btn.dataset.id));
+  });
+  document.querySelectorAll('.deleteLendBtn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const f = Store.data.friendFamily.find(x=>x.id===btn.dataset.id);
+      if(confirm(`Delete this entry for ${f.person}? Past transactions won't be deleted.`)){
+        Store.data.friendFamily = Store.data.friendFamily.filter(x=>x.id!==f.id);
+        Store.save(); toast('Deleted'); render();
+      }
     });
   });
   const addLendBtn = document.getElementById('addLendBtn');
-  if(addLendBtn) addLendBtn.addEventListener('click', ()=>{
-    const person = prompt('Person name:'); if(!person) return;
-    const direction = confirm('Click OK for "I Lent" (you gave money), or Cancel for "Borrowed from" (you received money).') ? 'I Lent' : 'Borrowed from';
-    const amt = parseFloat(prompt('Amount (₹):','')||'');
-    if(isNaN(amt) || amt<=0){ toast('Enter a valid amount'); return; }
-    const reason = prompt('Reason (optional):','')||'';
-    const accName = pickAccount(direction==='I Lent' ? 'Paying from which account?' : 'Receiving into which account?');
-    if(!accName) return;
-    Store.data.friendFamily.push({ id: Store.newId('f'), person, direction, date: todayStr(), amount: amt,
-      reason, amountSettled:0, settlementDate:null, status:'Outstanding', notes:'' });
-    Store.data.transactions.push({ id: Store.newId('t'), date: todayStr(), amount: amt,
-      type: direction==='I Lent' ? 'Money Lent' : 'Debt borrowed',
-      source: accName, dest:'', category:'', subcategory:'', description:`${direction==='I Lent'?'Lent to':'Borrowed from'} ${person}`,
-      paymentMethod:'', person, notes: reason });
-    Store.save(); toast('Saved'); render();
-  });
+  if(addLendBtn) addLendBtn.addEventListener('click', ()=> openLendEditSheet(null));
 
   const chitBtn = document.getElementById('chitContribBtn');
   if(chitBtn) chitBtn.addEventListener('click', ()=>{
     const chit = Store.data.chit;
-    const accName = pickAccount('Pay contribution from which account?');
-    if(!accName) return;
-    Store.data.transactions.push({ id: Store.newId('t'), date: todayStr(), amount: chit.contribution,
-      type:'Investment', source: accName, dest:'', category:'Financial', subcategory:'Chit contribution',
-      description:'Chit contribution', paymentMethod:'', person:'', notes:'' });
-    if(chit.contributionsRemaining>0) chit.contributionsRemaining -= 1;
-    Store.save(); toast('Contribution logged'); render();
+    pickAccountAsync('Pay contribution from which account?', accName=>{
+      if(!accName) return;
+      Store.data.transactions.push({ id: Store.newId('t'), date: todayStr(), amount: chit.contribution,
+        type:'Investment', source: accName, dest:'', category:'Financial', subcategory:'Chit contribution',
+        description:'Chit contribution', paymentMethod:'', person:'', notes:'' });
+      if(chit.contributionsRemaining>0) chit.contributionsRemaining -= 1;
+      Store.save(); toast('Contribution logged'); render();
+    });
+  });
+}
+
+// Add or edit a Friend/Family lending entry via a sheet form.
+function openLendEditSheet(id){
+  const existing = id ? Store.data.friendFamily.find(x=>x.id===id) : null;
+  const f = existing || { person:'', direction:'I Lent', date: todayStr(), amount:'', reason:'', notes:'' };
+  const body = `
+    <div class="field"><label>Person</label><input type="text" id="lendPerson" value="${escapeHtml(f.person)}" list="lendPeopleList">
+      <datalist id="lendPeopleList">${Store.data.settings.people.map(p=>`<option value="${escapeHtml(p)}">`).join('')}</datalist>
+    </div>
+    <div class="type-toggle" id="lendDirToggle">
+      <button type="button" data-dir="I Lent" class="${f.direction==='I Lent'?'active':''}">I Lent (I gave money)</button>
+      <button type="button" data-dir="Borrowed from" class="${f.direction==='Borrowed from'?'active':''}">Borrowed from (I received)</button>
+    </div>
+    <input type="hidden" id="lendDirection" value="${f.direction}">
+    <div class="row-2">
+      <div class="field"><label>Amount (₹)</label><input type="number" step="0.01" id="lendAmount" value="${f.amount}"></div>
+      <div class="field"><label>Date</label><input type="date" id="lendDate" value="${f.date}"></div>
+    </div>
+    <div class="field"><label>Reason</label><input type="text" id="lendReason" value="${escapeHtml(f.reason||'')}"></div>
+    ${!existing ? `<p class="page-sub">This will also log a transaction moving the money.</p>` : ''}
+    <div class="btn-row">
+      ${existing ? `<button class="btn btn-danger" id="lendDeleteBtn" type="button">Delete</button>` : ''}
+      <button class="btn" id="lendSaveBtn" type="button">${existing?'Save changes':'Add'}</button>
+    </div>
+  `;
+  openSheet(existing ? 'Edit lending entry' : 'Add lending / borrowing', body, ()=>{
+    document.getElementById('lendDirToggle').querySelectorAll('button').forEach(b=>{
+      b.addEventListener('click', ()=>{
+        document.getElementById('lendDirection').value = b.dataset.dir;
+        document.getElementById('lendDirToggle').querySelectorAll('button').forEach(x=>x.classList.toggle('active', x===b));
+      });
+    });
+    const delBtn = document.getElementById('lendDeleteBtn');
+    if(delBtn) delBtn.addEventListener('click', ()=>{
+      if(confirm(`Delete this entry for ${f.person}? Past transactions won't be deleted.`)){
+        Store.data.friendFamily = Store.data.friendFamily.filter(x=>x.id!==existing.id);
+        Store.save(); toast('Deleted'); closeSheet(); render();
+      }
+    });
+    document.getElementById('lendSaveBtn').addEventListener('click', ()=>{
+      const person = document.getElementById('lendPerson').value.trim();
+      const direction = document.getElementById('lendDirection').value;
+      const amt = parseFloat(document.getElementById('lendAmount').value);
+      const date = document.getElementById('lendDate').value;
+      const reason = document.getElementById('lendReason').value.trim();
+      if(!person){ toast('Enter a name'); return; }
+      if(isNaN(amt) || amt<=0){ toast('Enter a valid amount'); return; }
+      if(existing){
+        Object.assign(existing, { person, direction, amount: amt, date, reason });
+        Store.save(); toast('Saved'); closeSheet(); render();
+      } else {
+        pickAccountAsync(direction==='I Lent' ? 'Paying from which account?' : 'Receiving into which account?', accName=>{
+          if(!accName) return;
+          Store.data.friendFamily.push({ id: Store.newId('f'), person, direction, date, amount: amt,
+            reason, amountSettled:0, settlementDate:null, status:'Outstanding', notes:'' });
+          Store.data.transactions.push({ id: Store.newId('t'), date, amount: amt,
+            type: direction==='I Lent' ? 'Money Lent' : 'Debt borrowed',
+            source: accName, dest:'', category:'', subcategory:'', description:`${direction==='I Lent'?'Lent to':'Borrowed from'} ${person}`,
+            paymentMethod:'', person, notes: reason });
+          Store.save(); toast('Saved'); closeSheet(); render();
+        });
+      }
+    });
   });
 }
 
@@ -955,15 +1074,16 @@ function wireRecurringPage(){
       if(val===null) return;
       const amt = parseFloat(val);
       if(isNaN(amt) || amt<=0){ toast('Enter a valid amount'); return; }
-      const accName = pickAccount('Pay from which account?');
-      if(!accName) return;
-      Store.data.transactions.push({ id: Store.newId('t'), date: todayStr(), amount: amt, type:'Expense',
-        source: accName, dest:'', category: r.category, subcategory: r.item, description: r.item,
-        paymentMethod:'', person:'', notes:'' });
-      let inst = Store.data.recurringInstances.find(i=>i.recurringId===r.id && i.month===mk);
-      if(!inst){ inst = { recurringId:r.id, month:mk }; Store.data.recurringInstances.push(inst); }
-      inst.paid = true; inst.actualAmount = amt; inst.paidDate = todayStr();
-      Store.save(); toast('Marked paid'); render();
+      pickAccountAsync('Pay from which account?', accName=>{
+        if(!accName) return;
+        Store.data.transactions.push({ id: Store.newId('t'), date: todayStr(), amount: amt, type:'Expense',
+          source: accName, dest:'', category: r.category, subcategory: r.item, description: r.item,
+          paymentMethod:'', person:'', notes:'' });
+        let inst = Store.data.recurringInstances.find(i=>i.recurringId===r.id && i.month===mk);
+        if(!inst){ inst = { recurringId:r.id, month:mk }; Store.data.recurringInstances.push(inst); }
+        inst.paid = true; inst.actualAmount = amt; inst.paidDate = todayStr();
+        Store.save(); toast('Marked paid'); render();
+      });
     });
   });
   document.querySelectorAll('.editRecurringBtn').forEach(btn=>{
@@ -1099,14 +1219,6 @@ function wireMorePage(){
       navigate('dashboard');
     }
   });
-}
-
-function pickAccount(label){
-  const names = Store.data.accounts.map(a=>a.name);
-  const val = prompt(`${label}\n(${names.join(', ')})`, names[0]||'');
-  if(val===null) return null;
-  if(!names.includes(val)){ toast('Account not recognized'); return null; }
-  return val;
 }
 
 /* ===================== Init ===================== */
