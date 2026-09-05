@@ -42,14 +42,19 @@ const Store = {
       try{
         this.data = JSON.parse(raw);
         if(!this.data.meta) this.data.meta = { nextId: this._computeNextId(this.data) };
-        if(!this.data.meta.updatedAt) this.data.meta.updatedAt = Date.now();
+        // Missing timestamp = we don't know when this was last touched, so treat it
+        // as the OLDEST possible copy — never let it beat a real timestamp from
+        // Drive. Only an actual edit (via save()) should ever produce a fresh one.
+        if(!this.data.meta.updatedAt) this.data.meta.updatedAt = 0;
         return;
       }catch(e){ console.warn('Corrupt data, reseeding', e); }
     }
     this.data = structuredClone(SEED_DATA);
     this.data.recurringInstances = this.data.recurringInstances || [];
-    this.data.meta = { nextId: this._computeNextId(this.data), updatedAt: Date.now() };
-    this.save({ skipSync:true });
+    // Same reasoning here: a brand-new install shouldn't out-rank real data
+    // that may already exist in Drive from another device.
+    this.data.meta = { nextId: this._computeNextId(this.data), updatedAt: 0 };
+    this.save({ skipSync:true, skipTimestamp:true });
   },
 
   _computeNextId(d){
