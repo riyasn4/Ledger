@@ -1,4 +1,4 @@
-const CACHE = 'ledger-cache-v2';
+const CACHE = 'ledger-cache-v3';
 const ASSETS = [
   './',
   './index.html',
@@ -26,14 +26,23 @@ self.addEventListener('activate', e=>{
 });
 
 self.addEventListener('fetch', e=>{
-  if(e.request.method !== 'GET') return;
+  const req = e.request;
+  if(req.method !== 'GET') return;
+  // Only ever handle this app's own files. Anything cross-origin — Google
+  // sign-in, the Drive API, fonts — is left completely alone so the page's
+  // own fetch() calls behave normally and aren't wrapped in caching logic
+  // that doesn't apply to them.
+  const url = new URL(req.url);
+  if(url.origin !== self.location.origin) return;
+
   e.respondWith(
-    caches.match(e.request).then(cached=>{
-      const fetchPromise = fetch(e.request).then(networkResp=>{
-        caches.open(CACHE).then(c=>c.put(e.request, networkResp.clone()));
+    caches.match(req).then(cached=>{
+      if(cached) return cached;
+      return fetch(req).then(networkResp=>{
+        const copy = networkResp.clone();
+        caches.open(CACHE).then(c=>c.put(req, copy)).catch(()=>{});
         return networkResp;
       }).catch(()=> cached);
-      return cached || fetchPromise;
     })
   );
 });
