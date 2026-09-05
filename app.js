@@ -1262,34 +1262,41 @@ function openRecoverySheet(){
       return;
     }
     const list = revisions.map((r,i)=>`
-      <div class="ledger-row">
+      <div class="ledger-row" data-row="${i}">
         <span class="label">${new Date(r.modifiedTime).toLocaleString('en-IN',{ day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' })}</span>
         <span class="fill"></span>
         <button class="btn-ghost previewRevBtn" data-idx="${i}" style="padding:6px 12px;">Preview</button>
-      </div>`).join('');
+      </div>
+      <div id="revPreview${i}"></div>`).join('');
     document.getElementById('sheetBody').innerHTML = `
-      <p class="page-sub mt-0">Drive keeps a history of saves. Newest first — preview one to see what's in it before restoring anything.</p>
+      <p class="page-sub mt-0">Drive keeps a history of saves (${revisions.length} found). Newest first — preview one to see what's in it before restoring anything. The preview opens right below the one you tap.</p>
       ${list}
-      <div id="revPreviewArea"></div>
     `;
     document.querySelectorAll('.previewRevBtn').forEach(btn=>{
       btn.addEventListener('click', async ()=>{
-        const rev = revisions[Number(btn.dataset.idx)];
-        const area = document.getElementById('revPreviewArea');
+        const idx = Number(btn.dataset.idx);
+        const rev = revisions[idx];
+        const area = document.getElementById('revPreview' + idx);
+        // toggle closed if already open
+        if(area.dataset.open === '1'){ area.innerHTML=''; area.dataset.open='0'; btn.textContent='Preview'; return; }
+        btn.textContent = 'Loading…';
         area.innerHTML = `<p class="page-sub">Loading preview…</p>`;
+        area.scrollIntoView({ block:'center', behavior:'smooth' });
         const content = await DriveSync.fetchRevisionContent(rev.id);
+        btn.textContent = 'Preview';
         if(!content){ area.innerHTML = `<p class="page-sub">Couldn't read that version.</p>`; return; }
         const summary = summarizeSnapshot(content);
         if(!summary){ area.innerHTML = `<p class="page-sub">Couldn't read that version.</p>`; return; }
+        area.dataset.open = '1';
         area.innerHTML = `
-          <div class="card" style="margin-top:10px;">
+          <div class="card" style="margin:6px 0 12px;">
             <div class="ledger-row"><span class="label">Total liquid money</span><span class="fill"></span><span class="amount neutral">${fmtMoney(summary.totalLiquid)}</span></div>
             <div class="ledger-row"><span class="label">Accounts</span><span class="fill"></span><span class="amount neutral">${summary.accountCount} (${summary.accounts.map(a=>escapeHtml(a.name)).join(', ')})</span></div>
             <div class="ledger-row"><span class="label">Transactions</span><span class="fill"></span><span class="amount neutral">${summary.txnCount}</span></div>
-            <button class="btn" id="restoreRevBtn" style="margin-top:12px;">Restore this version</button>
+            <button class="btn" id="restoreRevBtn${idx}" style="margin-top:12px;">Restore this version</button>
           </div>
         `;
-        document.getElementById('restoreRevBtn').addEventListener('click', ()=>{
+        document.getElementById('restoreRevBtn' + idx).addEventListener('click', ()=>{
           if(confirm('This replaces everything currently on this device with this older version. Continue?')){
             Store.data = content;
             Store.save();
