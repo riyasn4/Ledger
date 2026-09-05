@@ -47,11 +47,11 @@ const DriveSync = (function(){
         scope: SCOPE,
         callback: onTokenResponse
       });
-      setStatus('signed-out', 'Not signed in');
-      if(isSignedIn()){
-        setStatus('syncing', 'Reconnecting…');
-        tokenClient.requestAccessToken({ prompt: '' }); // silent
-      }
+      // Don't request a token just for opening the app — only when an actual
+      // sync is about to happen (see ensureFreshToken()). Requesting one on
+      // every single app open was what caused the account-picker to keep
+      // popping up on mobile.
+      setStatus(isSignedIn() ? 'idle' : 'signed-out', isSignedIn() ? 'Signed in' : 'Not signed in');
     });
   }
 
@@ -138,6 +138,22 @@ const DriveSync = (function(){
     try{ return await res.json(); }catch(e){ return null; }
   }
 
+  async function listRevisions(){
+    await ensureFreshToken();
+    const id = await ensureFile();
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${id}/revisions?fields=revisions(id,modifiedTime,size)`, { headers: authHeader() });
+    const json = await res.json();
+    return (json.revisions || []).sort((a,b)=> new Date(b.modifiedTime) - new Date(a.modifiedTime));
+  }
+
+  async function fetchRevisionContent(revisionId){
+    await ensureFreshToken();
+    const id = await ensureFile();
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${id}/revisions/${revisionId}?alt=media`, { headers: authHeader() });
+    if(!res.ok) return null;
+    try{ return await res.json(); }catch(e){ return null; }
+  }
+
   async function pushLocal(){
     await ensureFreshToken();
     const id = await ensureFile();
@@ -189,7 +205,7 @@ const DriveSync = (function(){
     reconcile();
   }
 
-  return { init, signIn, signOut, syncNow, scheduleSync, onStatusChange, getStatus, isConfigured, isSignedIn };
+  return { init, signIn, signOut, syncNow, scheduleSync, onStatusChange, getStatus, isConfigured, isSignedIn, listRevisions, fetchRevisionContent };
 })();
 
 document.addEventListener('DOMContentLoaded', ()=> DriveSync.init());

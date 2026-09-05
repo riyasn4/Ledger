@@ -747,6 +747,7 @@ function renderMore(){
             ? `<button class="btn-secondary" id="syncNowBtn" style="flex:1;">Sync now</button><button class="btn-ghost" id="signOutBtn">Sign out</button>`
             : `<button class="btn" id="signInBtn">Sign in with Google</button>`}
         </div>
+        ${signedIn ? `<button class="btn-ghost" id="recoverBtn" style="margin-top:10px;width:100%;">Recover an older version from Drive history</button>` : ''}
       `}
     </div>
 
@@ -1161,6 +1162,8 @@ function wireMorePage(){
   if(signOutBtn) signOutBtn.addEventListener('click', ()=>{ DriveSync.signOut(); render(); });
   const syncNowBtn = document.getElementById('syncNowBtn');
   if(syncNowBtn) syncNowBtn.addEventListener('click', ()=> DriveSync.syncNow());
+  const recoverBtn = document.getElementById('recoverBtn');
+  if(recoverBtn) recoverBtn.addEventListener('click', openRecoverySheet);
   if(!wireMorePage._subscribed){
     wireMorePage._subscribed = true;
     DriveSync.onStatusChange(()=>{ if(currentRoute==='more') render(); });
@@ -1223,6 +1226,80 @@ function wireMorePage(){
       toast('Data reset');
       navigate('dashboard');
     }
+  });
+}
+
+// Summarize a raw data snapshot (from a Drive revision) for preview, without touching the live Store.
+function summarizeSnapshot(data){
+  try{
+    const accounts = (data.accounts||[]).map(a=>{
+      let bal = Number(a.openingBalance)||0;
+      (data.transactions||[]).forEach(t=>{
+        if(t.type==='Transfer'){
+          if(t.source===a.name) bal -= t.amount;
+          if(t.dest===a.name) bal += t.amount;
+        } else if(t.source===a.name){
+          if(t.type==='Adjustment') bal += t.amount;
+          else { const dir = TYPE_DIRECTION[t.type] || 'out'; bal += (dir==='in'? t.amount : -t.amount); }
+        }
+      });
+      return { name: a.name, balance: Math.round(bal*100)/100 };
+    });
+    const totalLiquid = accounts.reduce((s,a)=>s+a.balance,0);
+    return { totalLiquid, accountCount: accounts.length, accounts, txnCount: (data.transactions||[]).length };
+  }catch(e){
+    return null;
+  }
+}
+
+function openRecoverySheet(){
+  openSheet('Recover from Drive history', `<p class="page-sub mt-0">Loading previous versions…</p>`, async ()=>{
+    let revisions;
+    try{ revisions = await DriveSync.listRevisions(); }
+    catch(err){ document.getElementById('sheetBody').innerHTML = `<p class="page-sub mt-0">Could not load history — check your connection and that you're signed in.</p>`; return; }
+    if(!revisions.length){
+      document.getElementById('sheetBody').innerHTML = `<p class="page-sub mt-0">No earlier versions found in Drive.</p>`;
+      return;
+    }
+    const list = revisions.map((r,i)=>`
+      <div class="ledger-row">
+        <span class="label">${new Date(r.modifiedTime).toLocaleString('en-IN',{ day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' })}</span>
+        <span class="fill"></span>
+        <button class="btn-ghost previewRevBtn" data-idx="${i}" style="padding:6px 12px;">Preview</button>
+      </div>`).join('');
+    document.getElementById('sheetBody').innerHTML = `
+      <p class="page-sub mt-0">Drive keeps a history of saves. Newest first — preview one to see what's in it before restoring anything.</p>
+      ${list}
+      <div id="revPreviewArea"></div>
+    `;
+    document.querySelectorAll('.previewRevBtn').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const rev = revisions[Number(btn.dataset.idx)];
+        const area = document.getElementById('revPreviewArea');
+        area.innerHTML = `<p class="page-sub">Loading preview…</p>`;
+        const content = await DriveSync.fetchRevisionContent(rev.id);
+        if(!content){ area.innerHTML = `<p class="page-sub">Couldn't read that version.</p>`; return; }
+        const summary = summarizeSnapshot(content);
+        if(!summary){ area.innerHTML = `<p class="page-sub">Couldn't read that version.</p>`; return; }
+        area.innerHTML = `
+          <div class="card" style="margin-top:10px;">
+            <div class="ledger-row"><span class="label">Total liquid money</span><span class="fill"></span><span class="amount neutral">${fmtMoney(summary.totalLiquid)}</span></div>
+            <div class="ledger-row"><span class="label">Accounts</span><span class="fill"></span><span class="amount neutral">${summary.accountCount} (${summary.accounts.map(a=>escapeHtml(a.name)).join(', ')})</span></div>
+            <div class="ledger-row"><span class="label">Transactions</span><span class="fill"></span><span class="amount neutral">${summary.txnCount}</span></div>
+            <button class="btn" id="restoreRevBtn" style="margin-top:12px;">Restore this version</button>
+          </div>
+        `;
+        document.getElementById('restoreRevBtn').addEventListener('click', ()=>{
+          if(confirm('This replaces everything currently on this device with this older version. Continue?')){
+            Store.data = content;
+            Store.save();
+            toast('Restored');
+            closeSheet();
+            navigate('dashboard');
+          }
+        });
+      });
+    });
   });
 }
 
